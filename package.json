@@ -1,0 +1,20 @@
+{
+  "name": "ai-auto",
+  "version": "1.0.0",
+  "description": "AI DRIVEN SHELL AUTOMATION V25.0-RC1",
+  "homepage": "https://github.com/Loopshape/ai-auto#readme",
+  "bugs": {
+    "url": "https://github.com/Loopshape/ai-auto/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Loopshape/ai-auto.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
