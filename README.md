@@ -84,6 +84,3 @@ export CHUNK_SIZE=100
 This Quick Start guide lets developers get up and running in minutes with AI-assisted automation, batch processing, and smart scripting workflows.
 
 This version is **concise, copy-paste ready**, and ideal for fast onboarding while preserving the most important commands, options, and examples.  
-
-I can also make a **visual diagram of workflow & chunking** to include in the README if you want it. Do you want me to do that next?
-
