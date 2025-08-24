@@ -1,3 +1,4 @@
+```markdown
 # AI Code Assistant v25.1
 
 **AI-AUTO Framework** – A sophisticated, AI-driven shell script automation framework that optimizes developer workflows with cognitive assistance, batch processing, and strategic planning.
@@ -111,3 +112,90 @@ It works with queue-reloop logic: if a chunk fails, it can be retried without re
 **Example:** Process 1200 files in 24 chunks of 50:
 ```bash
 ./ai-assistant.sh rebuild src/**/*.js
+```
+Each file is automatically backed up and a `diff` is shown before changes are finalized.
+
+---
+
+## File-Specific Instructions
+
+Create a `.ai_instructions` file in your project's root directory to provide specific prompts that override the main command for certain files or patterns.
+
+### `.ai_instructions` Format
+
+The format is `pattern : instruction`. The script supports glob patterns.
+
+```ini
+# Pattern : Instruction
+src/main.js : Optimize all loops for performance and readability.
+src/utils/*.js : Ensure all functions have proper JSDoc comments.
+src/api/*.js : Convert all promise-based callbacks to async/await and add robust error handling.
+```
+
+This works in both single-file and batch modes. When `rebuild src/**/*.js` is run, each file matching a pattern receives its corresponding custom instruction instead of the generic `rebuild` prompt.
+
+### Example Usage
+
+-   **Edit a single file with a one-off instruction:**
+    ```bash
+    ./ai-assistant.sh edit src/main.js "Refactor the main function for better readability"
+    ```
+
+-   **Rebuild multiple files using `.ai_instructions`:**
+    ```bash
+    ./ai-assistant.sh rebuild src/**/*.js
+    ```
+
+---
+
+## Strategize & Interactive Mode
+
+Combine `--strategize` and `--interactive` to turn the assistant into a cognitive partner that plans before it acts.
+
+-   `--strategize` generates a step-by-step plan from the AI.
+-   `--interactive` allows you to approve or reject the plan before any files are touched.
+
+This is most powerful with the `edit` and `build` commands, as it combines your high-level goal with the file context to produce a coherent technical strategy.
+
+```bash
+./ai-assistant.sh --strategize --interactive build src/ "Add logging and error handling to all API modules"
+```
+
+---
+
+## Termux & Mobile Environment Support
+
+The assistant is fully functional in Termux on Android, respecting mobile memory and CPU constraints. The `CHUNK_SIZE` can be reduced for low-resource devices by setting an environment variable:
+
+```bash
+export CHUNK_SIZE=20
+./ai-assistant.sh rebuild src/**/*.js
+```
+
+It also supports local media scanning, allowing it to work with mobile development projects that include images or other assets.
+
+---
+
+## Examples
+
+-   **Reformat a Single File:**
+    ```bash
+    ./ai-assistant.sh format src/main.js
+    ```
+
+-   **Apply a Shared Context to a Batch of Files:**
+    ```bash
+    ./ai-assistant.sh -c "This project uses TypeScript with strict mode enabled." edit src/**/*.ts "Apply project coding standards"
+    ```
+
+-   **Strategize and Build a New Feature:**
+    ```bash
+    ./ai-assistant.sh --strategize build src/ "Generate all necessary frontend HTML/CSS/JS components for a user profile page"
+    ```
+
+---
+
+## License
+
+MIT License – Free to use and modify.
+```
