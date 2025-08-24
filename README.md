@@ -197,5 +197,5 @@ It also supports local media scanning, allowing it to work with mobile developme
 
 ## License
 
-MIT License – Free to use and modify.
+MIT License – Free to use and modify
 ```
