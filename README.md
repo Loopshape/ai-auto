@@ -100,7 +100,7 @@ Global Options
 
 --interactive – Pause for approval between plan phases.
 
---quota QUOTA – Set AI's architectural focus.
+--quota QUOTA – Set AIs architectural focus.
 
 -c, --context "..." – Provide a shared context string.
 
