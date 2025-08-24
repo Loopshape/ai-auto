@@ -1,4 +1,3 @@
-Here’s the fully concatenated, detailed Git README in Markdown, ready for copy-paste, including all sections (summary, installation, features, commands, batch processing, advanced prompts, Termux support, and examples):
 
 # AI Code Assistant v25.1
 
