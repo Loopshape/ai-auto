@@ -1,179 +1,337 @@
 #!/usr/bin/env bash
-# ========================================================
-# 🎯 AI Code Assistant v25.1 - GitHub-Ready Complete
-# ========================================================
-# Features: Single-File & Batch Modes, Chunking, Logging, Backup, Strategize & Interactive
-# Model: Ollama Gemma series (auto-selected)
-# Author: AI Code Lab
-# ========================================================
+#
+# AI Code Assistant v25.1
+# AI-AUTO Framework – A sophisticated, AI-driven shell script automation framework
+# that optimizes developer workflows with cognitive assistance, batch processing, and
+# strategic planning.
+#
 
-set -euo pipefail
+# --- Strict Mode & Initial Setup ---
+set -eo pipefail # Exit on error, but not on pipe failures within loops
+shopt -s nullglob # Expands globs to nothing if no match is found
 
-# --- Paths ---
-: "${OLLAMA_API_URL:="http://localhost:11434"}"
-CORE_DIR="$HOME/.ai_core"
-BACKUP_DIR="$CORE_DIR/backups"
-ARCHIVE_DIR="$CORE_DIR/archive"
-LOG_DIR="$CORE_DIR/logs"
-TEMP_DIR="$CORE_DIR/temp"
-LOG_FILE="$LOG_DIR/events.log"
+# --- Default Configuration (can be overridden by environment variables) ---
+: "${MODEL:="gemma:2b"}" # Use gemma:2b if MODEL is not set
+: "${CHUNK_SIZE:=50}"    # Default batch size, kept smaller for mobile compatibility
+: "${EDITOR:="nano"}"    # Default editor for the 'update' command
 
-# --- Defaults ---
-DEFAULT_MODEL="gemma3:1b"
-MODEL="$DEFAULT_MODEL"
-AUTO_CONFIRM=1
-MAX_RELOOPS=3
-CHUNK_SIZE=500
-CONTEXT_STRING=""
-STRATEGIZE_ENABLED=0
-INTERACTIVE_ENABLED=0
-STRATEGY_QUOTA="pipeline"
-declare -g -A FILE_INSTRUCTION_MAP
+# --- Global State Variables ---
+VERSION="25.1"
+COMMAND=""
+USER_PROMPT=""
+STRATEGIZE=false
+INTERACTIVE=false
+CONFIRM_CHANGES=false
+SHARED_CONTEXT=""
+AI_QUOTA=""
+declare -a FILE_QUEUE=()
+declare -A INSTRUCTIONS_CACHE # Associative array for .ai_instructions
 
-# --- Prompt Templates ---
-readonly PROMPT_TEMPLATE_EDIT_SINGLE="[CONTEXT_BLOCK][FILE_INSTRUCTION_BLOCK]Expert '[LANGUAGE]' programmer. Modify '[FILE]'.\n---\n[CONTENT]\n---\nUser Task: [USER_PROMPT]\nRespond ONLY with complete '[LANGUAGE]' code."
-readonly PROMPT_TEMPLATE_REBUILD_SINGLE="[CONTEXT_BLOCK][FILE_INSTRUCTION_BLOCK]Expert script refactoring. Rebuild '[FILE]' robustly, readable, add error handling/comments. Do not change core.\n---\n[CONTENT]\n---\nRespond ONLY with rebuilt script in markdown."
-readonly PROMPT_TEMPLATE_FORMAT_SINGLE="[CONTEXT_BLOCK][FILE_INSTRUCTION_BLOCK]Precise code formatter. Reformat '[FILE]' according to language conventions.\n---\n[CONTENT]\n---\nRespond ONLY with reformatted code in markdown."
-readonly PROMPT_TEMPLATE_REBUILD_BATCH="Rebuild scripts robustly, readable, efficient, respecting dependencies."
-readonly PROMPT_TEMPLATE_FORMAT_BATCH="Reformat files according to standard conventions."
+# --- Core Utility Functions ---
+log() {
+  printf "\e[34m[AI Assistant]\e[0m %s\n" "$*" >&2
+}
 
-# --- Utilities ---
-fail() { echo -e "\n❌ Error: $1" >&2; exit 1; }
-log_action() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
+warn() {
+  printf "\e[33m[AI Assistant] WARNING:\e[0m %s\n" "$*" >&2
+}
+
+error() {
+  printf "\e[31m[AI Assistant] ERROR:\e[0m %s\n" "$*" >&2
+  exit 1
+}
 
 usage() {
-    cat <<EOF
-Usage: $(basename "$0") <command> [options] [files|-] [prompt]
+  cat << EOF
+AI Code Assistant v$VERSION - AI-AUTO Framework
 
-Commands:
-  edit       Apply prompt to files (default)
-  build      Build interconnected files from high-level goal
-  rebuild    Rebuild scripts robustly
-  format     Reformat code
-  test       Show final prompt only
-  update     Self-update script
+A sophisticated, AI-driven shell script automation framework.
 
-Options:
-  -p, --prompt       Confirm before applying changes
-  --strategize       Generate strategic plan before execution
-  --interactive      Pause between plan phases
-  --quota QUOTA      Set AI focus
-  -c, --context "..." Shared context string
-  -m, --model MODEL  Specify Ollama model
-  -h, --help         Show help
+USAGE:
+  $(basename "$0") <command> [options] [files...]
+
+CORE COMMANDS:
+  edit        Apply a custom prompt to one or more files. (Default)
+  build       Construct interconnected files from a high-level goal.
+  rebuild     Rebuild scripts for robustness, readability, and modern syntax.
+  format      Reformat code according to standard conventions.
+  test        (Under development) Preview prompts without applying changes.
+  update      Edit and update the assistant script itself.
+
+GLOBAL OPTIONS:
+  -p, --prompt          Require confirmation before applying each change.
+  --strategize          Generate a strategic plan before execution.
+  --interactive         Pause for approval after generating a strategic plan.
+  --quota QUOTA         Set AI's architectural focus (e.g., "security", "performance").
+  -c, --context "..."   Provide a shared context string for all files.
+  -m, --model MODEL     Override default AI model (default: $MODEL).
+  -h, --help            Show this help message.
+
+EXAMPLES:
+  # Reformat a single file
+  $(basename "$0") format src/main.js
+
+  # Rebuild all JS files, asking for confirmation on each
+  $(basename "$0") rebuild -p src/**/*.js
+
+  # Strategize a new feature build, then wait for approval to proceed
+  $(basename "$0") build --strategize --interactive src/ "Add a new user login module"
 EOF
-    exit 1
 }
 
-# --- Core Functions ---
-self_update() {
-    local TMP_FILE; TMP_FILE=$(mktemp "$TEMP_DIR/update.XXXXXX")
-    echo "🖋️ Open editor to update script..."
-    nano "$TMP_FILE"
-    [[ -s "$TMP_FILE" ]] && mv -f "$TMP_FILE" "$0" && chmod +x "$0" && echo "🎉 Script updated." || { echo "❌ Update aborted."; rm -f "$TMP_FILE"; }
-    exit 0
-}
-
-auto_select_best_model() {
-    [[ "$MODEL" != "$DEFAULT_MODEL" ]] && { echo "ℹ️ Using model: $MODEL"; return; }
-    local preferred=("gemma3:1b" "gemma2:latest" "gemma:2b")
-    local installed; installed=$(ollama list | awk 'NR>1 {print $1}')
-    for m in "${preferred[@]}"; do [[ $installed =~ $m ]] && { MODEL="$m"; echo "✅ Selected: $MODEL"; return; }; done
-    echo "⚠️ Default '$DEFAULT_MODEL' missing, using fallback 'gemma2:latest'."
-    MODEL="gemma2:latest"
-}
-
-load_file_instructions() {
-    [[ -f ".ai_instructions" ]] || return
-    echo "ℹ️ Loading '.ai_instructions'"
-    while IFS= read -r line; do
-        [[ "$line" =~ ^\s*# || -z "$line" ]] && continue
-        local pattern="${line%%:*}" instruction="${line#*:}"
-        FILE_INSTRUCTION_MAP["$pattern"]="$instruction"
-    done < ".ai_instructions"
-}
-
-ensure_ollama_is_running() {
-    curl -s --fail "$OLLAMA_API_URL" -o /dev/null || { echo "🔌 Starting Ollama..."; ollama serve & disown; sleep 2; }
-}
-
-get_language_from_filename() { echo "${1##*.}" | tr '[:upper:]' '[:lower:]'; }
-scan_for_media() { find . -maxdepth 2 -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.svg" -o -iname "*.mp4" -o -iname "*.mp3" \) -print; }
-
-generate_code_from_prompt() {
-    local prompt="$1"
-    local payload; payload=$(jq -n --arg model "$MODEL" --arg prompt "$prompt" '{model:$model,prompt:$prompt,stream:true}')
-    curl -s -X POST "$OLLAMA_API_URL/api/generate" -d "$payload"
-}
-
-process_single_file_instance() {
-    local REAL_PATH="$1" DISPLAY_NAME="$2" GENERATED_CODE="$3"
-    local TMP_FILE="$TEMP_DIR/$(basename "$DISPLAY_NAME" | tr -cd '[:alnum:]._-').tmp"
-    printf "%s" "$GENERATED_CODE" > "$TMP_FILE"
-
-    echo "🔍 Diff for $DISPLAY_NAME:"
-    diff -u "$REAL_PATH" "$TMP_FILE" || true
-
-    [[ "$AUTO_CONFIRM" -eq 1 ]] && CONFIRM="y" || read -p "Apply changes to $DISPLAY_NAME? [y/N]: " CONFIRM
-
-    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-        [[ -f "$REAL_PATH" ]] && cp "$REAL_PATH" "$BACKUP_DIR/$(basename "$REAL_PATH")_$(date '+%Y%m%d%H%M%S').bak"
-        mv "$TMP_FILE" "$REAL_PATH"
-        echo "✅ $DISPLAY_NAME updated."
-    else
-        rm "$TMP_FILE"
-        echo "❌ Changes for $DISPLAY_NAME discarded."
+# --- Prerequisite Check ---
+check_deps() {
+  for cmd in ollama git diff; do
+    if ! command -v "$cmd" &>/dev/null; then
+      error "'$cmd' command not found. Please install it to continue."
     fi
+  done
 }
 
-run_single_file_mode() {
-    local PROMPT="$1" REAL_PATH="$2" DISPLAY_NAME="$3"
-    local LANG; LANG=$(get_language_from_filename "$DISPLAY_NAME")
-    local CONTEXT_BLOCK=""; [[ -n "$CONTEXT_STRING" ]] && CONTEXT_BLOCK="Shared Context:\n---\n$CONTEXT_STRING\n---\n"
-    local FILE_BLOCK=""; [[ -n "${FILE_INSTRUCTION_MAP[$REAL_PATH]}" ]] && FILE_BLOCK="File Instruction:\n---\n${FILE_INSTRUCTION_MAP[$REAL_PATH]}\n---\n"
-    local FINAL_PROMPT="${PROMPT//\[CONTEXT_BLOCK\]/$CONTEXT_BLOCK}"
-    FINAL_PROMPT="${FINAL_PROMPT//\[FILE_INSTRUCTION_BLOCK\]/$FILE_BLOCK}"
-    FINAL_PROMPT="${FINAL_PROMPT//\[LANGUAGE\]/$LANG}"
-    FINAL_PROMPT="${FINAL_PROMPT//\[FILE\]/$DISPLAY_NAME}"
-    FINAL_PROMPT="${FINAL_PROMPT//\[CONTENT\]/$(cat "$REAL_PATH")}"
-
-    local GENERATED; GENERATED=$(generate_code_from_prompt "$FINAL_PROMPT")
-    process_single_file_instance "$REAL_PATH" "$DISPLAY_NAME" "$GENERATED"
+# --- File & Instruction Handling ---
+parse_instructions() {
+  local instructions_file=".ai_instructions"
+  if [ ! -f "$instructions_file" ]; then
+    return
+  fi
+  while IFS=':' read -r pattern instruction || [[ -n "$pattern" ]]; do
+    # Trim whitespace
+    pattern=$(echo "$pattern" | xargs)
+    instruction=$(echo "$instruction" | xargs)
+    if [[ -n "$pattern" && ! "$pattern" =~ ^# ]]; then
+      INSTRUCTIONS_CACHE["$pattern"]="$instruction"
+    fi
+  done < "$instructions_file"
 }
 
-run_batch_mode() {
-    local BATCH_PROMPT="$1"; shift
-    for FILE_PATH in "$@"; do
-        local FNAME; FNAME=$(basename "$FILE_PATH")
-        run_single_file_mode "$BATCH_PROMPT" "$FILE_PATH" "$FNAME"
-    done
+get_instruction_for_file() {
+  local file="$1"
+  local matched_instruction=""
+  # Iterate through patterns to find the best match
+  for pattern in "${!INSTRUCTIONS_CACHE[@]}"; do
+    if [[ "$file" == $pattern ]]; then
+      matched_instruction="${INSTRUCTIONS_CACHE[$pattern]}"
+    fi
+  done
+  echo "$matched_instruction"
 }
 
-# --- Main ---
+# --- Core AI Interaction ---
+run_ai() {
+  local full_prompt="$1"
+  local model_override="$2"
+  local effective_model="${model_override:-$MODEL}"
+
+  if ! ollama run "$effective_model" "$full_prompt" 2>/dev/null; then
+      warn "AI command failed for model '$effective_model'. Trying a fallback..."
+      if ! ollama run "gemma:2b" "$full_prompt"; then
+          error "AI command failed with both primary and fallback models."
+      fi
+  fi
+}
+
+
+# --- Main Processing Logic ---
 main() {
-    mkdir -p "$BACKUP_DIR" "$ARCHIVE_DIR" "$LOG_DIR" "$TEMP_DIR"
-    [[ $# -eq 0 ]] && usage
-    auto_select_best_model
-    load_file_instructions
-    ensure_ollama_is_running
+  check_deps
+  parse_instructions
 
-    COMMAND="${1:-edit}"; shift
-    FILES=("$@")
-    [[ ${#FILES[@]} -eq 0 ]] && fail "No files specified."
-
-    case "$COMMAND" in
-        edit) PROMPT="$PROMPT_TEMPLATE_EDIT_SINGLE" ;;
-        rebuild) PROMPT="$PROMPT_TEMPLATE_REBUILD_SINGLE" ;;
-        format) PROMPT="$PROMPT_TEMPLATE_FORMAT_SINGLE" ;;
-        build) PROMPT="$PROMPT_TEMPLATE_REBUILD_BATCH" ;;
-        *) fail "Unknown command: $COMMAND" ;;
+  # --- Argument Parsing ---
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      edit|build|rebuild|format|test|update)
+        [[ -z "$COMMAND" ]] && COMMAND="$1" || FILE_QUEUE+=("$1")
+        shift
+        ;;
+      -p|--prompt)
+        CONFIRM_CHANGES=true
+        shift
+        ;;
+      --strategize)
+        STRATEGIZE=true
+        shift
+        ;;
+      --interactive)
+        INTERACTIVE=true
+        shift
+        ;;
+      --quota)
+        AI_QUOTA="$2"
+        shift 2
+        ;;
+      -c|--context)
+        SHARED_CONTEXT="$2"
+        shift 2
+        ;;
+      -m|--model)
+        MODEL="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        error "Unknown option: $1"
+        ;;
+      *)
+        # Capture the user prompt or file paths
+        if [[ -z "$COMMAND" || "$COMMAND" == "edit" || "$COMMAND" == "build" ]] && [[ -z "$USER_PROMPT" ]] && ! [[ -f "$1" || -d "$1" ]]; then
+          USER_PROMPT="$1"
+        else
+          FILE_QUEUE+=("$1")
+        fi
+        shift
+        ;;
     esac
+  done
 
-    if [[ ${#FILES[@]} -eq 1 ]]; then
-        run_single_file_mode "$PROMPT" "${FILES[0]}" "$(basename "${FILES[0]}")"
-    else
-        run_batch_mode "$PROMPT" "${FILES[@]}"
+  # --- Command Handling ---
+  COMMAND=${COMMAND:-edit} # Default to 'edit'
+
+  case "$COMMAND" in
+    update)
+      log "Opening the assistant script for editing with $EDITOR..."
+      $EDITOR "$0"
+      log "Script updated. Please restart to apply changes."
+      exit 0
+      ;;
+    test)
+      log "The 'test' command is currently under re-architecture. Use 'edit' with '-p' for safe previews."
+      exit 0
+      ;;
+  esac
+
+  if [ ${#FILE_QUEUE[@]} -eq 0 ]; then
+    error "No files specified. See usage with '-h'."
+  fi
+
+  log "Starting command '$COMMAND' on ${#FILE_QUEUE[@]} files with model '$MODEL'."
+
+  # --- Archive Setup ---
+  ARCHIVE_DIR=".ai_cache/$(date +%Y-%m-%d_%H-%M-%S)"
+  mkdir -p "$ARCHIVE_DIR/originals"
+  log "Outputs and backups will be archived in: $ARCHIVE_DIR"
+
+  # --- Strategize Phase ---
+  STRATEGIC_PLAN=""
+  if [ "$STRATEGIZE" = true ]; then
+    log "Generating strategic plan..."
+    local plan_prompt="Based on the goal \"$USER_PROMPT\", the shared context \"$SHARED_CONTEXT\", and the file list provided, generate a concise, step-by-step technical plan for a senior developer to execute. Files: ${FILE_QUEUE[*]}. Focus on: ${AI_QUOTA:-general best practices}."
+    STRATEGIC_PLAN=$(run_ai "$plan_prompt" "$MODEL")
+    
+    echo -e "\n\e[1m--- AI Strategic Plan ---\e[0m"
+    echo "$STRATEGIC_PLAN"
+    echo -e "\e[1m-------------------------\e[0m\n"
+
+    if [ "$INTERACTIVE" = true ]; then
+      read -p "Do you approve this plan and wish to proceed? [Y/n] " approval
+      if [[ ! "$approval" =~ ^([yY][eE][sS]|[yY]|)$ ]]; then
+        log "Plan rejected by user. Aborting."
+        exit 0
+      fi
     fi
+  fi
+
+  # --- Batch Processing Phase ---
+  local failed_files=()
+  local batch_num=1
+  for batch_chunk in $(printf "%s\n" "${FILE_QUEUE[@]}" | xargs -n "$CHUNK_SIZE"); do
+    log "Processing chunk #$batch_num..."
+    for file in $batch_chunk; do
+      if [ ! -f "$file" ]; then
+        warn "Skipping '$file' (not found or not a regular file)."
+        continue
+      fi
+
+      log "Processing: $file"
+      
+      # Determine the final prompt for this file
+      local file_instruction
+      file_instruction=$(get_instruction_for_file "$file")
+      local final_prompt="$USER_PROMPT"
+
+      if [[ -n "$file_instruction" ]]; then
+        final_prompt="$file_instruction"
+        log "  -> Using file-specific instruction from .ai_instructions"
+      fi
+
+      # Construct the full context for the AI
+      local base_prompt
+      case "$COMMAND" in
+        rebuild) base_prompt="Rebuild the following script for maximum robustness, readability, and modern syntax. Apply best practices mercilessly." ;;
+        format)  base_prompt="Reformat the following code according to standard conventions for its language. Do not add or remove logic." ;;
+        build)   base_prompt="Your high-level goal is: '$USER_PROMPT'. Now, generate the content for the file '$file' as part of this goal." ;;
+        *)       base_prompt="Apply the following instruction to the code: '$final_prompt'." ;;
+      esac
+      
+      local full_ai_prompt="SYSTEM CONTEXT:
+- Shared Context: ${SHARED_CONTEXT:-Not provided}
+- Architectural Quota: ${AI_QUOTA:-Not provided}
+- Strategic Plan: ${STRATEGIC_PLAN:-Not provided}
+
+TASK: $base_prompt
+
+FILE CONTENT:
+\`\`\`
+$(cat "$file")
+\`\`\`
+
+YOUR RESPONSE SHOULD ONLY CONTAIN THE FULL, UPDATED CODE FOR THE FILE. DO NOT INCLUDE EXPLANATIONS OR APOLOGIES.
+"
+      
+      # Backup original file
+      cp "$file" "$ARCHIVE_DIR/originals/$(basename "$file").bak"
+      
+      # Run AI and get new content
+      local ai_output
+      ai_output=$(run_ai "$full_ai_prompt" "$MODEL")
+      
+      # Sanitize AI output (remove markdown code fences)
+      local sanitized_output
+      sanitized_output=$(echo "$ai_output" | sed -e '1s/^```[a-zA-Z]*//' -e '$s/^```$//')
+
+      # Save AI output for archival
+      echo "$ai_output" > "$ARCHIVE_DIR/$(basename "$file").ai_response"
+      
+      # Create a temporary file for the diff
+      local temp_file
+      temp_file=$(mktemp)
+      echo "$sanitized_output" > "$temp_file"
+      
+      # Show diff and confirm
+      log "  -> Generating diff..."
+      if git diff --no-index --color=always "$file" "$temp_file"; then
+        log "  -> AI made no changes to the file."
+        rm "$temp_file"
+        continue
+      fi
+
+      local apply=true
+      if [ "$CONFIRM_CHANGES" = true ]; then
+        read -p "Apply these changes to '$file'? [Y/n] " confirm
+        if [[ ! "$confirm" =~ ^([yY][eE][sS]|[yY]|)$ ]]; then
+          apply=false
+        fi
+      fi
+
+      if [ "$apply" = true ]; then
+        mv "$temp_file" "$file"
+        log "  -> Changes applied."
+      else
+        failed_files+=("$file")
+        rm "$temp_file"
+        log "  -> Changes skipped by user."
+      fi
+    done
+    ((batch_num++))
+  done
+
+  log "Processing complete."
+  if [ ${#failed_files[@]} -gt 0 ]; then
+    warn "The following files were not modified due to user choice or an error: ${failed_files[*]}"
+  fi
 }
 
+# --- Script Entrypoint ---
 main "$@"
