@@ -1,60 +1,43 @@
-# AI-AUTO Framework
+# 🧠 AI Code Assistant v25.1
 
-This essay traces the key stages of development and shows how each version forged a core element of the tool that culminated in **V25.0-RC1**.
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-25.1-blue.svg)]
+[![GitHub Workflow](https://img.shields.io/github/actions/workflow/status/yourusername/ai-code-assistant/main.yml?branch=main)]()
 
-## Milestones of a Cognitive Architecture
-
-*AI-AUTO is a framework for automating the development, management, and deployment of AI-driven shell scripts. Version 25.0-RC1 focuses on a streamlined workflow for scripting, testing, and deployment. Its target audience is AI engineers seeking to manage the lifecycle of their models more efficiently, minimize manual effort, and accelerate rollout.*
-
-The journey was marked by rapid progress. Each step was more than just an update – it shifted the paradigm, transforming a helper tool into a strategic partner.
+**AI Code Assistant** ist ein industriestarker Shell-Skript-Assistent, der KI-gesteuerte Codebearbeitung, Formatierung und Refactoring direkt über die Kommandozeile ermöglicht. Unterstützt Single-File und Batch-Modus mit intelligentem Chunking.
 
 ---
 
-## Era I: Genesis (V1.0 – V2.0) — The Spark of Automation
-
-At the beginning stood a simple idea: automate shell scripting with AI.
-
-- **V1.0 – The Wrapper**  
-  The first version was a modest but decisive proof: AI could be invoked from the shell to edit files. It introduced key basics like wildcard file access, backups, and logging. Yet the model was reloaded for every single file – a clear performance bottleneck.
-
-- **V2.0 – The Batch Processor**  
-  The first major leap. Instead of handling files one by one, the AI bundled them into a structured JSON request. This resolved the performance crisis and laid the foundation for **modular scripting**. For the first time, the AI gained cross-file context – a precursor of the streamlined workflows to come.
+## Inhaltsverzeichnis
+- [Features](#features)
+- [Installation](#installation)
+- [Verwendung](#verwendung)
+- [Beispiele](#beispiele)
+- [Konfiguration](#konfiguration)
+- [Lizenz](#lizenz)
 
 ---
 
-## Era II: The Crucible (V3.0 – V8.0) — Stability and Professionalism
-
-With the fundamentals established, refinement took center stage: reliability, stability, and usability.
-
-- **V4.0 – API-First**  
-  The shaky `ollama run` integration gave way to direct REST API communication. This eliminated severe bugs like the “empty file” issue. A wrapper became a stable application – the bedrock for automated testing.
-
-- **V5.0 – The Command Router**  
-  The framework evolved into a genuine CLI suite. Commands such as `edit`, `rebuild`, and `format` introduced specialization and modularity. Users were no longer just issuing instructions – they were invoking well-defined capabilities.
-
-- **V8.0 – The Hardened Parser**  
-  A professional-grade argument parser eliminated input ambiguities. This created a robust foundation on which cognitive features could be safely built.
+## Features
+- Single-File & Batch-Modus
+- Intelligentes Chunking für große Dateimengen
+- Backup & Archivierung vor Änderungen
+- Diff-Vorschau vor Übernahme
+- Strategize & Interactive Mode
+- Ollama Gemma Modelle (auto-select)
+- Selbst-Update Funktion
+- Cross-File Kontext und Medienintegration
 
 ---
 
-## Era III: The Cognitive Leap (V9.0 – V26.0) — From Tool to Partner
+## Installation
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/ai-code-assistant.git
+cd ai-code-assistant
 
-Here, AI-AUTO became truly AI-driven. It no longer just executed; it began to think, plan, and collaborate.
+# Make script executable
+chmod +x ai-code-assistant.sh
 
-- **V15.0 – The Mindset Governor**  
-  With the `--quota` flag, users could assign the AI specific mindsets – such as `dom`, `node`, or `pipeline`. The framework’s approach to problem-solving itself became configurable.
-
-- **V20.0 – The Cognitive Renderer**  
-  The AI began to “speak.” It explained its reasoning in real time and, via the `build` command, scanned the project environment to automatically incorporate context. This enabled seamless **integration with external tools**.
-
-- **V21.0 – Auto-Tuned Build**  
-  The framework analyzed its runtime environment and dynamically adjusted API calls. Manual fine-tuning became unnecessary.
-
-- **V26.0 – The Cryptographer**  
-  With the `crypto` command, security entered the stage. The framework generated verified `openssl` commands, proving that performance and security can advance hand in hand.
-
----
-
-## From Command to Collaboration
-
-The evolution of AI-AUTO is a showcase of iterative design: from a simple idea – “automate a shell command” – it grew into a versatile cognitive framework. Today, it is not merely a tool for faster workflows, but a partner that turns the terminal from a space of execution into a place of strategic collaboration.
+# Optional: Add to PATH
+sudo ln -s "$(pwd)/ai-code-assistant.sh" /usr/local/bin/ai-code-assistant
