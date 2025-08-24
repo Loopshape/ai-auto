@@ -220,17 +220,3 @@ License
 
 MIT License – Free to use and modify.
 
-This README now **covers everything**:
-
-- Detailed **summary & characteristics**
-- Installation instructions for Linux/Termux
-- Command references
-- Batch processing & chunking explanations
-- `.ai_instructions` file usage
-- Strategize & interactive mode
-- Examples of all major operations
-
-It’s fully self-contained for **copy-paste into your Git repository**.  
-
-If you want, I can also generate a **shortened "Quick Start" version** for immediate project onboarding. Do you want me to create that too?
-
