@@ -1,1 +1,271 @@
-./bin/configure.sh
+#!/usr/bin/env bash
+#
+# ai-env-doctor: AI Environment Maintenance & Health Check Tool
+#
+# A comprehensive utility to back up configuration, clean temporary caches,
+# and verify repository and application URLs for a local AI development environment.
+#
+# Features:
+#   - Selective operations via flags (--backup, --clean, --check).
+#   - Interactive confirmation prompt for safety (--force to override).
+#   - Detailed logging to both console and a log file.
+#   - Compressed .tar.gz backups to save space.
+#   - External configuration file support (~/.ai_maintenance.conf).
+#   - Smart URL scanning that ignores common domains.
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+# Treat unset variables as an error.
+set -u
+# Pipes fail if any command in the pipe fails.
+set -o pipefail
+
+# ---------- DEFAULT CONFIGURATION ----------
+# These values can be overridden by creating a file at ~/.ai_maintenance.conf
+
+# Files to be backed up.
+REPL_FILES=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.ai_repl.sh" "$HOME/.ai_live.sh" "$HOME/.ai_full_repl.sh")
+
+# Temporary or cache directories to be cleaned.
+TEMP_DIRS=("$HOME/.ai_temp" "$HOME/.ai_cache" "$HOME/downloads/ai_models_temp")
+
+# A list of critical URLs to always verify.
+CRITICAL_URLS=(
+    "https://ai.studio/apps/bundled/live_audio"
+    "https://ai.studio/apps/bundled/promptdj"
+)
+
+# Domains to ignore during URL scans to reduce noise.
+EXCLUDED_DOMAINS=("google.com" "microsoft.com" "schema.org" "apple.com")
+
+# Base directory for storing backups and logs.
+BACKUP_BASE_DIR="$HOME/.ai_backups"
+BACKUP_ARCHIVE_NAME="ai_env_backup_$(date +%Y%m%d-%H%M%S).tar.gz"
+
+# ---------- SCRIPT SETUP & LOGGING ----------
+# --- Colors ---
+C_GREEN='\033[0;32m'
+C_RED='\033[0;31m'
+C_YELLOW='\033[0;33m'
+C_BLUE='\033[0;34m'
+C_CYAN='\033[0;36m'
+C_NC='\033[0m' # No Color
+
+# --- Globals ---
+BACKUP_DIR=$(mktemp -d) # Create a temporary staging directory for the backup
+LOG_FILE="$BACKUP_DIR/maintenance_run.log"
+declare -a BROKEN_LINKS_LIST=()
+FORCE_MODE=0
+# Flags to control which actions to run
+RUN_BACKUP=0
+RUN_CLEAN=0
+RUN_CHECK=0
+
+# Master log function: prints to console and appends to the log file.
+log() {
+    local color="$1"
+    local message="$2"
+    # Don't use color if NO_COLOR is set or if not a TTY
+    if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then
+        echo "[$(date +'%T')] $message" | tee -a "$LOG_FILE"
+    else
+        echo -e "${color}[$(date +'%T')] ${C_NC}${message}" | tee -a "$LOG_FILE"
+    fi
+}
+
+# Cleanup function to remove the temporary backup directory on exit.
+cleanup() {
+  rm -rf "$BACKUP_DIR"
+}
+trap cleanup EXIT
+
+# ---------- HELP & USAGE ----------
+show_help() {
+    echo -e "${C_GREEN}AI Environment Maintenance & Health Check Tool${C_NC}"
+    echo "Usage: $0 [options]"
+    echo
+    echo -e "${C_YELLOW}Options:${C_NC}"
+    echo "  --backup          Run the backup process only."
+    echo "  --clean           Run the cleanup process only."
+    echo "  --check           Run the URL health check only."
+    echo "  --full            Run all processes (default behavior)."
+    echo "  -f, --force       Skip the interactive confirmation prompt for cleaning."
+    echo "  --no-color        Disable colored output."
+    echo "  -h, --help        Display this help message."
+    echo
+    echo -e "${C_YELLOW}Configuration:${C_NC}"
+    echo "  You can override the default file/directory lists by creating a"
+    echo "  configuration file at ${C_CYAN}~/.ai_maintenance.conf${C_NC}"
+}
+
+# ---------- CORE FUNCTIONS ----------
+
+# Checks for required command-line tools.
+check_dependencies() {
+    local missing=0
+    for cmd in "curl" "grep" "tar" "tee"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            log "$C_RED" "Error: Required command '$cmd' is not installed."
+            missing=1
+        fi
+    done
+    [ "$missing" -eq 1 ] && exit 1
+}
+
+# Creates a compressed tar.gz archive of all specified configuration files.
+create_backup_archive() {
+    log "$C_BLUE" "Starting backup process..."
+    local backed_up_count=0
+
+    for file in "${REPL_FILES[@]}"; do
+        if [ -f "$file" ]; then
+            log "$C_CYAN" "  -> Adding $file to backup set."
+            cp "$file" "$BACKUP_DIR/"
+            ((backed_up_count++))
+        else
+            log "$C_YELLOW" "  -> Skipping non-existent file: $file"
+        fi
+    done
+
+    if [ "$backed_up_count" -eq 0 ]; then
+        log "$C_YELLOW" "No files were found to back up. Skipping archive creation."
+        return
+    fi
+
+    # Create the final destination directory if it doesn't exist
+    mkdir -p "$BACKUP_BASE_DIR"
+    local final_archive_path="$BACKUP_BASE_DIR/$BACKUP_ARCHIVE_NAME"
+
+    log "$C_BLUE" "Compressing backup files into an archive..."
+    tar -czf "$final_archive_path" -C "$BACKUP_DIR" .
+    log "$C_GREEN" "Successfully created backup: $final_archive_path"
+}
+
+# Interactively cleans temporary directories.
+clean_directories() {
+    log "$C_BLUE" "Starting cleanup process..."
+    if [ ${#TEMP_DIRS[@]} -eq 0 ]; then
+        log "$C_YELLOW" "No temporary directories configured for cleaning."
+        return
+    fi
+    
+    echo "The following directories are configured for deletion:"
+    for dir in "${TEMP_DIRS[@]}"; do
+        [ -d "$dir" ] && echo -e "  - ${C_YELLOW}$dir${C_NC}"
+    done
+
+    if [ "$FORCE_MODE" -eq 0 ]; then
+        read -p "Are you sure you want to permanently delete these directories? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log "$C_RED" "Cleanup aborted by user."
+            return
+        fi
+    fi
+
+    local cleaned_count=0
+    for dir in "${TEMP_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            log "$C_YELLOW" "  -> Removing $dir"
+            rm -rf "$dir"
+            ((cleaned_count++))
+        fi
+    done
+
+    if [ "$cleaned_count" -gt 0 ]; then
+        log "$C_GREEN" "Cleanup complete. Removed $cleaned_count director(y/ies)."
+    else
+        log "$C_YELLOW" "No directories found to clean."
+    fi
+}
+
+# Checks a single URL and logs its status.
+verify_url_health() {
+    local url="$1"
+    # Use --max-time to prevent long hangs, -L to follow redirects, -s for silent, -o to discard output
+    if curl --max-time 10 -s -o /dev/null -L --head --fail "$url"; then
+        log "$C_GREEN" "  [OK] $url"
+    else
+        log "$C_RED" "  [BROKEN] $url"
+        BROKEN_LINKS_LIST+=("$url")
+    fi
+}
+
+# Scans files and checks a predefined list of URLs.
+run_link_checker() {
+    log "$C_BLUE" "Starting URL health check..."
+
+    # 1. Check critical, predefined URLs
+    log "$C_CYAN" "Verifying critical application URLs..."
+    for url in "${CRITICAL_URLS[@]}"; do
+        verify_url_health "$url"
+    done
+
+    # 2. Scan configuration files for other URLs
+    log "$C_CYAN" "Scanning REPL files for embedded URLs..."
+    local exclusion_pattern
+    exclusion_pattern=$(IFS=\|; echo "${EXCLUDED_DOMAINS[*]}")
+
+    for file in "${REPL_FILES[@]}"; do
+        if [ ! -f "$file" ]; then continue; fi
+        log "$C_CYAN" " -> In file: $file"
+        # Grep for URLs, exclude common domains, and check the rest
+        grep -Eo 'https?://[a-zA-Z0-9./?@&%_~#=-]+' "$file" | \
+            grep -Ev "($exclusion_pattern)" | \
+            sort -u | while read -r url; do
+            verify_url_health "$url"
+        done
+    done
+    log "$C_GREEN" "URL health check finished."
+}
+
+
+# ---------- MAIN EXECUTION ----------
+
+# --- Load External Config ---
+CONFIG_FILE="$HOME/.ai_maintenance.conf"
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# --- Argument Parsing ---
+if [ $# -eq 0 ]; then
+    RUN_BACKUP=1; RUN_CLEAN=1; RUN_CHECK=1; # Default to full run
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --backup) RUN_BACKUP=1; shift ;;
+        --clean) RUN_CLEAN=1; shift ;;
+        --check) RUN_CHECK=1; shift ;;
+        --full) RUN_BACKUP=1; RUN_CLEAN=1; RUN_CHECK=1; shift ;;
+        -f|--force) FORCE_MODE=1; shift ;;
+        --no-color) NO_COLOR=1; shift ;;
+        -h|--help) show_help; exit 0 ;;
+        *) log "$C_RED" "Unknown option: $1"; show_help; exit 1 ;;
+    esac
+done
+
+# --- Start ---
+log "$C_GREEN" "AI Environment Doctor - Initializing..."
+check_dependencies
+
+# --- Run Selected Actions ---
+[ "$RUN_BACKUP" -eq 1 ] && create_backup_archive
+[ "$RUN_CLEAN" -eq 1 ] && clean_directories
+[ "$RUN_CHECK" -eq 1 ] && run_link_checker
+
+# --- Final Summary ---
+echo
+log "$C_GREEN" "==================== FINAL REPORT ===================="
+log "$C_CYAN" "Full execution log available at: ${LOG_FILE}"
+if [ ${#BROKEN_LINKS_LIST[@]} -gt 0 ]; then
+    log "$C_RED" "Found ${#BROKEN_LINKS_LIST[@]} broken link(s):"
+    for link in "${BROKEN_LINKS_LIST[@]}"; do
+        echo -e "  - $link" | tee -a "$LOG_FILE"
+    done
+else
+    log "$C_GREEN" "All checked links appear to be healthy."
+fi
+log "$C_GREEN" "===================================================="
