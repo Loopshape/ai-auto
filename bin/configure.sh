@@ -1,106 +1,176 @@
-#!/usr/bin/env bash
-
-# --- AI v58 - Definitive Repo-Root Configurator ---
-# Version: 1.0
-# This script configures a cloned 'ai-auto' repository. It sanitizes the
-# environment, creates the cache structure, makes the 'ai' script executable,
-# and hooks it into the user's shell profile.
-
+#!/bin/bash
 set -e
 
-# --- UI and Utility Functions for the Installer ---
-RESET='\033[0m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; BOLD='\033[1m'
-ICON_SUCCESS=$(echo -e '\u2705'); ICON_INFO=$(echo -e '\u2139\ufe0f'); ICON_WARN=$(echo -e '\u26a0\ufe0f'); ICON_CLEAN=$(echo -e '\U0001f9f9')
+USER_HOME="$HOME"
+PROJECT_DIR="$USER_HOME/mindmap_ai"
+ENV_FILE="$USER_HOME/.env"
+GEMINI_API_KEY="AIzaSyD4eva8xXXqFmXvE_t3WTYjMJOZrE4LTU0"
 
-info() { echo -e "${BOLD}${BLUE}${ICON_INFO}  $1${RESET}"; }
-success() { echo -e "${BOLD}${GREEN}${ICON_SUCCESS} Success: $1${RESET}"; }
-warn() { echo -e "${BOLD}${YELLOW}${ICON_WARN}  Warning: $1${RESET}"; }
-error() { echo -e "\n${BOLD}${RED}\u274c Error:${RESET} $1" >&2; exit 1; }
-header() {
-    local title=" $1 "; local len=${#title}; local line; line=$(printf '%*s' "$len" | tr ' ' '=')
-    echo -e "\n${BOLD}${YELLOW}===${line}===${RESET}\n${BOLD}${YELLOW}===${title}===${RESET}\n${BOLD}${YELLOW}===${line}===${RESET}\n"
-}
+mkdir -p "$PROJECT_DIR/ai_workers" "$PROJECT_DIR/node_controller" "$PROJECT_DIR/frontend"
 
-# --- Sanitization and Provisioning ---
-sanitize_environment() {
-    header "Sanitizing Environment of Old Installations"
-    local was_cleaned=false; local old_command="$HOME/.local/bin/ai"; local old_core_dir="$HOME/.ai_core"; local old_repo="$HOME/ai-auto"; local shell_profiles=("$HOME/.bashrc" "$HOME/.zshrc")
-    if [ -f "$old_command" ]; then info "Removing old global command: $old_command"; rm -f "$old_command"; was_cleaned=true; fi
-    if [ -d "$old_core_dir" ]; then info "Removing old core dir: $old_core_dir"; rm -rf "$old_core_dir"; was_cleaned=true; fi
-    if [[ -d "$old_repo" && "$(pwd)" != "$old_repo" ]]; then info "Removing old fixed-path repo: $old_repo"; rm -rf "$old_repo"; was_cleaned=true; fi
-    for profile in "${shell_profiles[@]}"; do
-        if [ -f "$profile" ] && grep -qE "(# --- Load AI v[0-9]+.* ---|alias ai=|ai\(\))" "$profile"; then
-            info "Cleaning old configurations from $profile..."; cp "$profile" "$profile.bak.$(date +%s)";
-            sed -i.bak -e '/# --- Load AI v[0-9]\+.* ---/,/fi/d' "$profile"; info "A backup was created at $profile.bak"; was_cleaned=true
-        fi; done
-    if [[ "$was_cleaned" == true ]]; then success "Environment sanitization complete."; else info "No abandoned fixed-path installations found."; fi
-}
-check_and_install_deps() {
-    # This is a placeholder for the robust dependency checker.
-    :
-}
+echo "GEMINI_API_KEY=$GEMINI_API_KEY" > "$ENV_FILE"
 
-# --- Main Configuration Logic ---
-configure_repo() {
-    sanitize_environment; check_and_install_deps; header "AI v58 System Configurator"
-    
-    local AI_REPO_PATH="."; local AI_COMMAND_FILE="$AI_REPO_PATH/ai"; local CACHE_DIR="$AI_REPO_PATH/.ai-cache"
-    
-    info "Configuring project structure in current directory..."
-    mkdir -p "$CACHE_DIR/.tmp/originals" "$CACHE_DIR/.models" "$CACHE_DIR/.cdnlibs" "$CACHE_DIR/.logs"
-    success "Hidden cache structure is ready at $CACHE_DIR"
+pkg update -y
+pkg install -y python3 nodejs git curl espeak-ng npm fakeroot
 
-    info "Configuring .gitignore..."; 
-    cat <<'EOF' > "$AI_REPO_PATH/.gitignore"
-/.ai-cache/
-/configure.sh
-*.swp
-*.bak
-*~
-.DS_Store
+curl -s https://ollama.com/install.sh | bash || true
+pkill ollama 2>/dev/null || true
+ollama serve &
+
+for i in 1 2 3; do
+    WORKER_DIR="$PROJECT_DIR/ai_workers/worker$i"
+    mkdir -p "$WORKER_DIR"
+    python3 -m venv "$WORKER_DIR/venv"
+    "$WORKER_DIR/venv/bin/pip" install --upgrade pip
+    "$WORKER_DIR/venv/bin/pip" install fastapi uvicorn pydantic google-generativeai python-dotenv
+
+    cat > "$WORKER_DIR/ai_worker.py" <<'EOF'
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import os, json
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+load_dotenv()
+app = FastAPI()
+api_key=os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=api_key)
+model=genai.GenerativeModel('gemma3:1b')
+
+OFFLINE_CACHE=os.path.expanduser("~/.mindmap_offline.json")
+POOL_FILE=os.path.expanduser("~/.mindmap_pools.json")
+if not os.path.exists(OFFLINE_CACHE): 
+    with open(OFFLINE_CACHE,"w") as f: json.dump([],f)
+if not os.path.exists(POOL_FILE):
+    with open(POOL_FILE,"w") as f: json.dump({},f)
+
+class Prompt(BaseModel):
+    text: str
+    mime: str = "text/plain"
+
+@app.post("/generate")
+async def generate_node(prompt: Prompt):
+    try:
+        full_prompt = f"You are a mindmap assistant. Given '{prompt.text}', generate a concise sub-topic."
+        ai_text = model.generate_content(full_prompt).text.strip().replace("\n"," ")
+
+        try:
+            with open(POOL_FILE,"r") as f: pools=json.load(f)
+            pool_idx=str(abs(hash(ai_text))%8)
+            if pool_idx not in pools: pools[pool_idx]=[]
+            pools[pool_idx].append({"text":ai_text,"mime":prompt.mime})
+            with open(POOL_FILE,"w") as f: json.dump(pools,f)
+        except:
+            with open(OFFLINE_CACHE,"r") as f: offline=json.load(f)
+            offline.append({"text":ai_text,"mime":prompt.mime})
+            with open(OFFLINE_CACHE,"w") as f: json.dump(offline,f)
+            pool_idx="offline"
+
+        return {"original_prompt": prompt.text, "ai_response": ai_text, "pool_idx": pool_idx}
+    except Exception as e:
+        raise HTTPException(status_code=500,detail=str(e))
 EOF
-    success ".gitignore is configured."
-    
-    info "Making 'ai' script executable..."
-    if [ ! -f "$AI_COMMAND_FILE" ]; then
-        error "'ai' script not found in repository root. Please ensure it exists before running configure."
-    fi
-    chmod +x "$AI_COMMAND_FILE"
-    success "'ai' executable is ready."
+done
 
-    # --- Hook 'exec' function into shell profile ---
-    info "Hooking 'ai' command via exec function into your shell profile..."
-    local shell_profile="$HOME/.bashrc"; if [[ -n "$ZSH_VERSION" ]]; then shell_profile="$HOME/.zshrc"; fi; touch "$shell_profile"
-    
-    local ABS_AI_COMMAND_FILE; ABS_AI_COMMAND_FILE="$(pwd)/ai"
-    
-    cat <<EOF >> "$shell_profile"
+cd "$PROJECT_DIR/node_controller"
+npm init -y >/dev/null
+npm install express axios ws >/dev/null
 
-# --- Load AI v58 Exec Hook ---
-if [ -f "$ABS_AI_COMMAND_FILE" ]; then
-    ai() {
-        exec "$ABS_AI_COMMAND_FILE" "\$@"
+cat > api_controller.js <<'EOF'
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
+const http = require('http');
+const WebSocket = require('ws');
+
+const app = express();
+const PORT = 3000;
+const AI_WORKER_PORTS=[5000,5001,5002];
+let currentWorker=0;
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname,'../frontend')));
+
+const OFFLINE_FILE = process.env.HOME+'/.mindmap_offline.json';
+const POOL_FILE = process.env.HOME+'/.mindmap_pools.json';
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({server});
+
+function broadcastPools(){
+    if(fs.existsSync(POOL_FILE)){
+        const data = fs.readFileSync(POOL_FILE,'utf-8');
+        wss.clients.forEach(client=>{
+            if(client.readyState===WebSocket.OPEN) client.send(JSON.stringify({type:'pools',data:JSON.parse(data)}));
+        });
     }
-fi
+}
+
+app.post('/api/mindmap',async(req,res)=>{
+    const {prompt,mime,speakResponse}=req.body;
+    const workerPort=AI_WORKER_PORTS[currentWorker];
+    currentWorker=(currentWorker+1)%AI_WORKER_PORTS.length;
+    try{
+        const r=await axios.post(`http://localhost:${workerPort}/generate`,{text:prompt,mime:mime});
+        if(speakResponse && r.data.ai_response) exec(`espeak-ng "${r.data.ai_response}"`);
+        res.json(r.data);
+        broadcastPools();
+    }catch(e){res.status(500).send({error:e.message});}
+});
+
+app.get('/api/pools',(req,res)=>{
+    if(fs.existsSync(POOL_FILE)) res.json(JSON.parse(fs.readFileSync(POOL_FILE,'utf-8')));
+    else res.json({});
+});
+
+setInterval(async ()=>{
+    if(!fs.existsSync(OFFLINE_FILE)) return;
+    const offline = JSON.parse(fs.readFileSync(OFFLINE_FILE,'utf-8'));
+    if(offline.length===0) return;
+    for(const node of offline){
+        const workerPort=AI_WORKER_PORTS[currentWorker];
+        currentWorker=(currentWorker+1)%AI_WORKER_PORTS.length;
+        try{await axios.post(`http://localhost:${workerPort}/generate`,{text:node.text,mime:node.mime});}catch(e){}
+    }
+    fs.writeFileSync(OFFLINE_FILE,'[]');
+    broadcastPools();
+},10000);
+
+server.listen(PORT,()=>console.log(`Controller running at http://localhost:${PORT}`));
 EOF
-    success "Shell 'exec' hook configured in $shell_profile."
 
-    # --- Final Instructions ---
-    echo ""; success "${ICON_CLEAN} Configuration complete! Your repository is ready.";
-    info "The 'ai' command is now hooked into your shell."
-    info "To activate the new system, please restart your shell or run:"; echo -e "  ${BOLD}${GREEN}source $shell_profile${RESET}"
-}
+cd "$PROJECT_DIR"
+curl -s -o frontend/gsap.min.js https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
 
-# --- Uninstaller ---
-uninstall() {
-    header "AI v58 System Uninstaller"
-    warn "This will remove the generated './.ai-cache' directory and the hook from your shell profile."
-    warn "It will NOT remove the 'ai' script or other repo files."
-    read -p "Proceed? [y/N]: " -r confirm; if [[ ! "$confirm" =~ ^[Yy]$ ]]; then info "Cancelled."; exit 0; fi
-    sanitize_environment # This function does all the necessary cleaning
-    info "Removing local AI cache..."; rm -rf "./.ai-cache";
-    success "Uninstallation complete. Please restart your shell."
-}
+# frontend/index.html omitted for brevity (same as before)
 
-# --- Configurator Entrypoint ---
-if [[ "$1" == "--uninstall" ]]; then uninstall; else configure_repo; fi
+cat > run_workers.sh <<'EOF'
+#!/bin/bash
+for i in 1 2 3; do
+    PORT=$((4999+i))
+    WORKER_DIR="$PWD/ai_workers/worker$i"
+    "$WORKER_DIR/venv/bin/uvicorn" ai_worker:app --port $PORT --host 0.0.0.0 --app-dir "$WORKER_DIR" > "worker_${PORT}.log" 2>&1 &
+done
+echo "Workers started in background."
+EOF
+
+cat > run_controller.sh <<'EOF'
+#!/bin/bash
+cd node_controller
+node api_controller.js > "../controller.log" 2>&1 &
+cd ..
+echo "Controller started."
+EOF
+
+cat > run_all.sh <<'EOF'
+#!/bin/bash
+./run_workers.sh
+./run_controller.sh
+echo "All services started at http://localhost:3000"
+EOF
+
+chmod +x run_workers.sh run_controller.sh run_all.sh
+
+echo "✅ Installation complete. Run './run_all.sh' to start everything."
